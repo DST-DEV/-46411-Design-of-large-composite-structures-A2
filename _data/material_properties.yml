@@ -1,0 +1,26 @@
+Steel:
+    E: 210.0e+6
+    nu: 0.3
+    sigma_hat: 235.0e+6
+    tau_hat: 136.0e+6
+    rho: 7850.0
+Wood: 
+    E: 10.0e+6
+    nu: 0.44
+    sigma_hat: 40.0e+6
+    tau_hat: 23.0e+6
+    rho: 700.0
+GFRP:
+    E1: 39.0e+9
+    E2: 9.8e+9
+    G12: 2.8e+9
+    G13: 2.8e+9
+    G23: 2.0e+9
+    nu12: 0.3
+    rho: 1900.0
+    sigma_hat_1t: 1100.0e+6
+    sigma_hat_1c: 600.0e+6
+    sigma_hat_2t: 20.0e+6
+    sigma_hat_2c: 140.0e+6
+    tau_hat_12: 70.0e+6
+    

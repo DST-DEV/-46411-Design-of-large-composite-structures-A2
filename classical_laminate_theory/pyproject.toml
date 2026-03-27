@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Information on the package
+[project]
+name = "classical_laminate_theory"
+description = "A Python package for Classical Laminate Theory."
+version = "0.0.1"
+requires-python = ">= 3.14"
+authors = [
+    { name = "Davis Stöwer", email = "s242864@dtu.dk" }
+]
+
+dependencies = [
+    "numpy>2.2",
+]
+license = {file = "LICENSE"}
