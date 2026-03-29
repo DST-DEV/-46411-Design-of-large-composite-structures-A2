@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Thu Mar 26 22:11:05 2026
-
-@author: davis
-"""
-
 """
 Sandwich Beam Weight Optimizer
 ================================
@@ -16,16 +9,17 @@ Design variables:
   - foam   : Divinycell H grade (discrete choice — iterated over)
 
 Constraints (must all be satisfied simultaneously):
-  C1.  Mid-span deflection  <=  delta_max  (LC1 and LC2)
+  C1.  Mid-span deflection  <=  delta_max (LC1 and LC2)
   C2.  Skin bending stress  <=  sigma_allow (LC1 and LC2)
-  C3.  Core shear stress    <=  tau_allow   (LC1 and LC2)
+  C3.  Core shear stress    <=  tau_allow (LC1 and LC2)
+  C3.  Skin bending stress  <=  Face wrinkling stress (LC1 and LC2)
 
 Load cases:
-  LC1 – Uniform pressure q = 5 t/m^2 over the beam's plan area
+  LC1 – Uniform pressure q = 5 t/m^2 over the panel area
   LC2 – Patch load P = 2 t distributed over a 120 mm centred patch
 
 Fixed geometry:
-  L = 4 m span,  b = beam width (configurable, see PARAMETERS section)
+  L = 4 m span,  b = beam width (configurable)
 
 Optimisation strategy:
   Outer loop  -> discrete: iterate over all 8 Divinycell H grades
@@ -36,7 +30,6 @@ Optimisation strategy:
 
 References for formulae:
   - Zenkert, D. (1995). An Introduction to Sandwich Structures.
-  - Roark's Formulas for Stress and Strain, 8th ed., Table 8-1.
 """
 from pathlib import Path
 from dataclasses import dataclass
@@ -89,7 +82,7 @@ class FoamGrade:
     gamma_12:  float   # Shear strain [-]
     density:  float   # kg/m3
 
-# Divinycell H series -- DIAB product datasheet values
+# Divinycell H series
 with open(Path(__file__).parent
           / "_data" / "Divinycell_H_properties.yml", "r") as file:
     foam_mat = yaml.safe_load(file)
@@ -124,6 +117,7 @@ GFRP_mat = clt.materials.OrthotropicLamina(E1=GFRP_data["E1"],
                                            s_hat_2c=GFRP_data["sigma_hat_2c"],
                                            t_hat_12=GFRP_data["tau_hat_12"],
                                            )
+sigma_GFRP_crit = min(GFRP_data["sigma_hat_1t"], GFRP_data["sigma_hat_1c"])
 
 def layup_builder(t, sequence=[0, 90, 90, 0]):
     """
@@ -151,6 +145,7 @@ def layup_builder(t, sequence=[0, 90, 90, 0]):
 
     t_ply = t / n_sequence / n_layers_approx
     n_layers = int(t / n_sequence / t_ply)
+    if n_layers<1: n_layers = 1
 
     angles = [[angle]*n_layers for angle in sequence]
     plies = [clt.Ply(material=GFRP_mat, theta=angle, thickness=t_ply)
@@ -282,31 +277,49 @@ def core_shear_stress_standalone(V, t_s, t_c, skin, foam):
 
     return core_shear_stress(V=V, t_s=t_s, t_c=t_c, E_f=E_f, E_c=E_c, D=D)
 
-def skin_failure(M, t_s, t_c, skin, foam):  # TODO: Implement proper failure cases
-    """Dummy skin bending stress failure test.
+def skin_ply_stresses(M, t_s, t_c, skin, foam):
+    E_f = skin_stiffness(skin=skin, t_s=t_s)
+    D = bending_stiffness(t_s=t_s, t_c=t_c, E_f=E_f, E_c=foam.E_t)
+    t_ply = skin.plies[0].thickness
+    y = t_c/2 + np.linspace(t_ply/2, t_s-t_ply/2, len(skin.plies))
 
-    Compares average of tensile and compressive strenght of glass fiber
-    (times 0.75 as a safety margin) to the bending stress in the skin.
-    """
-    sigma_allow = (GFRP_mat.s_hat_1t + GFRP_mat.s_hat_1c) / 2 * .75
+    # Calculate strains
+    # sigma = M * E_f * (y + t_c/2) / D
+    # epsilon_x = sigma / E_f = M * (y + t_c/2) / D
+    epsilon_x = M * (y + t_c/2) / D
+    epsilon_1 = epsilon_x * np.array([ply.T_eps_inv[0, 0] for ply in skin.plies])
 
-    sigma_b = skin_bending_stress_standalone(M=M, t_s=t_s, t_c=t_c, skin=skin,
-                                             foam=foam)
+    # Calculate local stresses
+    E_local = np.array([ply.Q_12[0, 0] for ply in skin.plies])
+    sigma_local = epsilon_1 * E_local
 
-    return sigma_allow - sigma_b
+    return sigma_local
 
-def core_failure(V, t_s, t_c, skin, foam):  # TODO: Implement proper failure cases
-    """Dummy core shear stress failure test.
+def skin_failure_yielding(M, t_s, t_c, skin, foam):
+    sigma_local = skin_ply_stresses(M=M, t_s=t_s, t_c=t_c, skin=skin,
+                                    foam=foam)
 
-    Compares shear strength of the foam (times 0.75 as a safety margin) to the
-    shear stress in the core.
-    """
-    tau_allow = foam.tau_hat_12 * .75
+    failure_idx = sigma_GFRP_crit - np.max(sigma_local)
 
+    return failure_idx
+
+def core_shear_failure(V, t_s, t_c, skin, foam):
     tau_12 = core_shear_stress_standalone(V=V, t_s=t_s, t_c=t_c, skin=skin,
                                           foam=foam)
 
-    return tau_allow - tau_12
+    failure_idx = foam.tau_hat_12 - tau_12
+
+    return failure_idx
+
+def face_wrinkling(M, t_s, t_c, skin, foam):
+    E_f = skin_stiffness(skin=skin, t_s=t_s)
+    D = bending_stiffness(t_s=t_s, t_c=t_c, E_f=E_f, E_c=foam.E_t)
+
+    sigma_max = skin_bending_stress(M=M, t_s=t_s, t_c=t_c, E_f=E_f, D=D)
+    sigma_wrinkling = .5 * np.power(E_f * foam.E_t * foam.G, 1/3)
+
+    return sigma_wrinkling - sigma_max
+
 
 # Pre-compute moments and shears (since they are geometry-independent)
 M1, V1, M2, V2 = max_moment_shear()
@@ -336,19 +349,24 @@ def evaluate(t_s, t_c, foam):
                              D=D)
     tau2 = core_shear_stress(V=V2, t_s=t_s, t_c=t_c, E_f=E_f, E_c=foam.E_t,
                              D=D)
+    sig_wrinkling = .5 * np.power(E_f * foam.E_t * foam.G, 1/3)
 
 # =============================================================================
     # TODO: enable failure calculation once the formulas are properly implemented
 
-    # m_sigma_LC1 = skin_failure(M1, t_s=t_s, t_c=t_c, skin=skin, foam=foam)
-    # m_sigma_LC2 = skin_failure(M2, t_s=t_s, t_c=t_c, skin=skin, foam=foam)
-    # m_tau_LC1 = core_failure(V1, t_s=t_s, t_c=t_c, skin=skin, foam=foam)
-    # m_tau_LC2 = core_failure(V2, t_s=t_s, t_c=t_c, skin=skin, foam=foam)
+    m_sigma_LC1 = skin_failure_yielding(M1, t_s=t_s, t_c=t_c, skin=skin, foam=foam)
+    m_sigma_LC2 = skin_failure_yielding(M2, t_s=t_s, t_c=t_c, skin=skin, foam=foam)
+    m_tau_LC1 = core_shear_failure(V1, t_s=t_s, t_c=t_c, skin=skin, foam=foam)
+    m_tau_LC2 = core_shear_failure(V2, t_s=t_s, t_c=t_c, skin=skin, foam=foam)
+    m_wrinkling_LC1 = face_wrinkling(M1, t_s=t_s, t_c=t_c, skin=skin, foam=foam)
+    m_wrinkling_LC2 = face_wrinkling(M2, t_s=t_s, t_c=t_c, skin=skin, foam=foam)
 
-    m_sigma_LC1 = 1
-    m_sigma_LC2 = 1
-    m_tau_LC1 = 1
-    m_tau_LC2 = 1
+    # m_sigma_LC1 = 1
+    # m_sigma_LC2 = 1
+    # m_tau_LC1 = 1
+    # m_tau_LC2 = 1
+    # m_wrinkling_LC1 = 1
+    # m_wrinkling_LC2 = 1
 # =============================================================================
 
     mass = (2*t_s*GFRP_data["rho"] + t_c*foam.density) * B * L
@@ -366,6 +384,7 @@ def evaluate(t_s, t_c, foam):
         sigma_LC2 = sig2,
         tau_LC1 = tau1,
         tau_LC2 = tau2,
+        sig_wrinkling = sig_wrinkling,
 
         # Constraint margins: positive = satisfied, negative = violated
         m_defl_LC1 = DELTA_MAX - d1,
@@ -374,6 +393,8 @@ def evaluate(t_s, t_c, foam):
         m_sigma_LC2 = m_sigma_LC2,
         m_tau_LC1 = m_tau_LC1,
         m_tau_LC2 = m_tau_LC2,
+        m_wrinkling_LC1 = m_wrinkling_LC1,
+        m_wrinkling_LC2 = m_wrinkling_LC2
     )
 
 
@@ -396,22 +417,29 @@ def optimise_for_foam(foam):
 
     def obj(x):
         t_s, t_c = x
-        return (2*t_s*GFRP_data["rho"] + t_c*foam.density) * B * L
+        return 2*t_s + t_c
+        # return (2*t_s*GFRP_data["rho"] + t_c*foam.density) * B * L
 
     constraints = [
+        {'type': 'ineq',
+         'fun': lambda x: (x[0] + x[1]) / x[0] - 5.77},  # Ensure thin skin
         {'type': 'ineq',
          'fun': lambda x: (DELTA_MAX
                            - deflection_LC1(*stiffness(x[0], x[1], layup_builder(x[0], LAYUP), foam)))},
         {'type': 'ineq',
          'fun': lambda x: (DELTA_MAX - deflection_LC2(*stiffness(x[0], x[1], layup_builder(x[0], LAYUP), foam)))},
-        # {'type': 'ineq',
-        #  'fun': lambda x: skin_failure(M1, x[0], x[1], layup_builder(x[0], LAYUP), foam)},
-        # {'type': 'ineq',
-        #  'fun': lambda x: skin_failure(M2, x[0], x[1], layup_builder(x[0], LAYUP), foam)},
-        # {'type': 'ineq',
-        #  'fun': lambda x: core_failure(V1, x[0], x[1], layup_builder(x[0], LAYUP), foam)},
-        # {'type': 'ineq',
-        #  'fun': lambda x: core_failure(V2, x[0], x[1], layup_builder(x[0], LAYUP), foam)},
+        {'type': 'ineq',
+         'fun': lambda x: skin_failure_yielding(M1, x[0], x[1], layup_builder(x[0], LAYUP), foam)},
+        {'type': 'ineq',
+         'fun': lambda x: skin_failure_yielding(M2, x[0], x[1], layup_builder(x[0], LAYUP), foam)},
+        {'type': 'ineq',
+         'fun': lambda x: core_shear_failure(V1, x[0], x[1], layup_builder(x[0], LAYUP), foam)},
+        {'type': 'ineq',
+         'fun': lambda x: core_shear_failure(V2, x[0], x[1], layup_builder(x[0], LAYUP), foam)},
+        {'type': 'ineq',
+         'fun': lambda x: face_wrinkling(M1, x[0], x[1], layup_builder(x[0], LAYUP), foam)},
+        {'type': 'ineq',
+         'fun': lambda x: face_wrinkling(M2, x[0], x[1], layup_builder(x[0], LAYUP), foam)},
     ]
     bounds = [(T_S_MIN, T_S_MAX), (T_C_MIN, T_C_MAX)]
 
@@ -482,7 +510,7 @@ def run():
     best_design  = None
     best_mass    = np.inf
 
-    for foam in DIVINYCELL_H[:3]:
+    for foam in DIVINYCELL_H:
         result = optimise_for_foam(foam)
         if result:
             all_feasible.append(result)
@@ -528,18 +556,20 @@ def run():
           f"{r['delta_max']*1e3:>10.2f}"
           f"  {ok2(r['m_defl_LC1'], r['m_defl_LC2'])}")
 
-# =============================================================================
-#     TODO: Enable output once the failure calculation is implemented
-#     print(f"  {'Skin bending stress (MPa)':<32}"
-#           f"{r['sigma_LC1']*1e-6:>9.2f}"
-#           f"{r['sigma_LC2']*1e-6:>9.2f}"
-#           f"  {ok2(r['m_sigma_LC1'], r['m_sigma_LC2'])}")
-#
-#     print(f"  {'Core shear stress (MPa)':<32}"
-#           f"{r['tau_LC1']*1e-6:>9.4f}"
-#           f"{r['tau_LC2']*1e-6:>9.4f}"
-#           f"  {ok2(r['m_tau_LC1'], r['m_tau_LC2'])}")
-# =============================================================================
+    print(f"  {'Skin bending stress (MPa)':<32}"
+          f"{r['sigma_LC1']*1e-6:>9.2f}"
+          f"{r['sigma_LC2']*1e-6:>9.2f}"
+          f"  {ok2(r['m_sigma_LC1'], r['m_sigma_LC2'])}")
+
+    print(f"  {'Core shear stress (MPa)':<32}"
+          f"{r['tau_LC1']*1e-6:>9.4f}"
+          f"{r['tau_LC2']*1e-6:>9.4f}"
+          f"  {ok2(r['m_tau_LC1'], r['m_tau_LC2'])}")
+
+    print(f"  {'Allowable face wrinkling stress (MPa)':<32}"
+          f"{r['sig_wrinkling']*1e-6:>9.4f}"
+          f"{r['sig_wrinkling']*1e-6:>9.4f}"
+          f"  {ok2(r['m_wrinkling_LC1'], r['m_wrinkling_LC2'])}")
 
     if len(all_feasible) > 1:
         print()
@@ -556,6 +586,7 @@ def run():
                 'deflection': min(d['m_defl_LC1'], d['m_defl_LC2'])*1e3,
                 'skin stress': min(d['m_sigma_LC1'], d['m_sigma_LC2'])*1e3,
                 'core shear': min(d['m_tau_LC1'], d['m_tau_LC2'])*1e3,
+                'face wrinkling': min(d['m_wrinkling_LC1'], d['m_wrinkling_LC2'])*1e3,
             }
             active = min(margins, key=margins.get)
             tag = " <- optimal" if d is best_design else ""
