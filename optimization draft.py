@@ -64,7 +64,7 @@ T_S_MIN, T_S_MAX = T_PLY_AVG*len(LAYUP), 25e-3  # T_PLY_AVG*N_LAYERS - 25 mm per
 # Core thickness search bounds [m]
 T_C_MIN, T_C_MAX = 5e-3, 150e-3   # 5 - 150 mm
 
-N_RESTARTS = 6  # Grid restarts per foam grade per axis. Total starts = N_RESTARTS^2.
+N_RESTARTS = 8  # Grid restarts per foam grade per axis. Total starts = N_RESTARTS^2.
 
 # ===================================================================
 # %% MATERIAL DATABASE
@@ -508,15 +508,15 @@ def run():
 
     all_feasible = []
     best_design  = None
-    best_mass    = np.inf
+    t_total    = np.inf
 
     for foam in DIVINYCELL_H:
         result = optimise_for_foam(foam)
         if result:
             all_feasible.append(result)
             flag = ""
-            if result['mass'] < best_mass:
-                best_mass   = result['mass']
+            if result['t_total'] < t_total:
+                t_total   = result['t_total']
                 best_design = result
                 flag = "  <- best"
             print(f"  {foam.name:<8} {result['t_skin']*1e3:>10.2f} "
