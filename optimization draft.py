@@ -54,7 +54,9 @@ W = 4.2  # Panel width [m]
 B = 0.12  # Beam width [m]
 T_PLY_MIN , T_PLY_MAX = 2e-4, 4e-4  # Ply thickness limits [m]
 T_PLY_AVG = (T_PLY_MAX + T_PLY_MIN) / 2
-LAYUP = [0, 90, 90, 0]
+LAYUP_STR = "[0/90]_S"
+LAYUP , _ = clt.laminate.builder.StackParser.parse(LAYUP_STR)
+N_PLIES = len(LAYUP)
 
 DELTA_MAX = .040  # allowable mid-span deflection [m]
 
@@ -117,7 +119,7 @@ GFRP_mat = clt.materials.OrthotropicLamina(E1=GFRP_data["E1"],
                                            s_hat_2c=GFRP_data["sigma_hat_2c"],
                                            t_hat_12=GFRP_data["tau_hat_12"],
                                            )
-sigma_GFRP_crit = min(GFRP_data["sigma_hat_1t"], GFRP_data["sigma_hat_1c"])
+sigma_hat_GFRP = GFRP_mat.strength_as_dict()
 
 def layup_builder(t, sequence=[0, 90, 90, 0]):
     """
@@ -180,7 +182,8 @@ def shear_stiffness_core(t_s, t_c, G_c):
 
 def bending_stiffness(t_s, t_c, E_f, E_c=0):
     d = t_c + t_s
-    return (E_f * t_s * d**2 / 2)  +  (E_f * t_s**3 / 6) + (E_c * t_c**3 / 12)
+    # return (E_f * t_s * d**2 / 2)  +  (E_f * t_s**3 / 6) + (E_c * t_c**3 / 12)
+    return (E_f * t_s * d**2 / 2)
 
 def bending_stiffness_automatic(t_s, t_c, skin, E_c=0):
     skin = layup_builder(t_s, LAYUP)
@@ -277,31 +280,37 @@ def core_shear_stress_standalone(V, t_s, t_c, skin, foam):
 
     return core_shear_stress(V=V, t_s=t_s, t_c=t_c, E_f=E_f, E_c=E_c, D=D)
 
-def skin_ply_stresses(M, t_s, t_c, skin, foam):
+def skin_ply_stresses_max(M, t_s, t_c, skin, foam):
     E_f = skin_stiffness(skin=skin, t_s=t_s)
     D = bending_stiffness(t_s=t_s, t_c=t_c, E_f=E_f, E_c=foam.E_t)
-    t_ply = skin.plies[0].thickness
-    y = t_c/2 + np.linspace(t_ply/2, t_s-t_ply/2, len(skin.plies))
 
-    # Calculate strains
+    # Calculate strains (assuming constant stress over laminate)
     # sigma = M * E_f * (y + t_c/2) / D
-    # epsilon_x = sigma / E_f = M * (y + t_c/2) / D
-    epsilon_x = M * (y + t_c/2) / D
-    epsilon_1 = epsilon_x * np.array([ply.T_eps_inv[0, 0] for ply in skin.plies])
+    # eps_x = sigma / E_f = M * (y + t_c/2) / D
+    eps_x = M * (t_s/2 + t_c/2) / D
+    eps_1 = eps_x * np.array([ply.T_eps_inv[0, 0] for ply in skin.plies])
+    eps_1_max = np.max(eps_1)
 
     # Calculate local stresses
-    E_local = np.array([ply.Q_12[0, 0] for ply in skin.plies])
-    sigma_local = epsilon_1 * E_local
+    # Note: all the plies are the same => local stiffness is the same
+    E1_local = skin.plies[0].Q_12[0, 0]
+    E21_local = skin.plies[0].Q_12[1, 0]
+    sigma_local_max = np.array([eps_1_max * E1_local,
+                                eps_1_max * E21_local,
+                                0])
 
-    return sigma_local
+    return sigma_local_max
 
 def skin_failure_yielding(M, t_s, t_c, skin, foam):
-    sigma_local = skin_ply_stresses(M=M, t_s=t_s, t_c=t_c, skin=skin,
-                                    foam=foam)
+    sigma_local_max = skin_ply_stresses_max(M=M, t_s=t_s, t_c=t_c, skin=skin,
+                                            foam=foam)
 
-    failure_idx = sigma_GFRP_crit - np.max(sigma_local)
+    idx_tsaihill_tension = clt.failure.TsaiHill.failure_index(
+        stress=sigma_local_max, **sigma_hat_GFRP)
+    idx_tsaihill_compression = clt.failure.TsaiHill.failure_index(
+        stress=-sigma_local_max, **sigma_hat_GFRP)
 
-    return failure_idx
+    return min(idx_tsaihill_tension, idx_tsaihill_compression)
 
 def core_shear_failure(V, t_s, t_c, skin, foam):
     tau_12 = core_shear_stress_standalone(V=V, t_s=t_s, t_c=t_c, skin=skin,
