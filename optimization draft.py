@@ -61,7 +61,7 @@ N_PLIES = len(LAYUP)
 DELTA_MAX = .040  # allowable mid-span deflection [m]
 
 # Skin thickness search bounds [m]
-T_S_MIN, T_S_MAX = T_PLY_AVG*len(LAYUP), 25e-3  # T_PLY_AVG*N_LAYERS - 25 mm per face sheet
+T_S_MIN, T_S_MAX = T_PLY_AVG*len(LAYUP), 20e-3  # T_PLY_AVG*N_LAYERS - 25 mm per face sheet
 
 # Core thickness search bounds [m]
 T_C_MIN, T_C_MAX = 5e-3, 150e-3   # 5 - 150 mm
@@ -142,16 +142,9 @@ def layup_builder(t, sequence=[0, 90, 90, 0]):
         The laminate object.
 
     """
-    n_sequence = len(sequence)
-    n_layers_approx = int(t / n_sequence / T_PLY_AVG)
-
-    t_ply = t / n_sequence / n_layers_approx
-    n_layers = int(t / n_sequence / t_ply)
-    if n_layers<1: n_layers = 1
-
-    angles = [[angle]*n_layers for angle in sequence]
+    t_ply = t / len(sequence)
     plies = [clt.Ply(material=GFRP_mat, theta=angle, thickness=t_ply)
-             for angles_group in angles for angle in angles_group]
+             for angle in sequence]
 
     return clt.Laminate(plies)
 
@@ -213,7 +206,6 @@ def deflection_LC1(D, S):
     """
     return 5/384 * q_LC1*L**4 / D + q_LC1*L**2 / (8 * S)
 
-
 def deflection_LC2(D, S):
     """
     Mid-span deflection under a symmetric patch load of intensity w_LC2 [N/m]
@@ -225,7 +217,6 @@ def deflection_LC2(D, S):
     => w_max = P * (L**3 / (48*D) + L / (4*S))
     """
     return P_LC2 * (L**3 / (48*D) + L / (4*S))
-
 
 def max_moment_shear():
     """
@@ -462,7 +453,7 @@ def optimise_for_foam(foam):
     for t_s0, t_c0 in starts:
         res = minimize(obj, x0=[t_s0, t_c0], method='SLSQP',
                        bounds=bounds, constraints=constraints,
-                       options={'ftol': 1e-10, 'maxiter': 3000})
+                       options={'ftol': 1e-11, 'maxiter': 5000})
         if res.success or res.fun < 1e10:
             r = evaluate(res.x[0], res.x[1], foam)
             if r and feasible(r):
@@ -613,3 +604,4 @@ def run():
 
 if __name__ == "__main__":
     run()
+    # res = evaluate(t_s=12e-3, t_c=60e-3, foam=DIVINYCELL_H[-1])
