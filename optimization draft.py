@@ -316,7 +316,7 @@ def face_wrinkling(M, t_s, t_c, skin, foam):
     D = bending_stiffness(t_s=t_s, t_c=t_c, E_f=E_f, E_c=foam.E_t)
 
     sigma_max = skin_bending_stress(M=M, t_s=t_s, t_c=t_c, E_f=E_f, D=D)
-    sigma_wrinkling = .5 * np.power(E_f * foam.E_t * foam.G, 1/3)
+    sigma_wrinkling = .5 * np.power(E_f * foam.E_c * foam.G, 1/3)
 
     return sigma_wrinkling - sigma_max
 
@@ -351,23 +351,12 @@ def evaluate(t_s, t_c, foam):
                              D=D)
     sig_wrinkling = .5 * np.power(E_f * foam.E_t * foam.G, 1/3)
 
-# =============================================================================
-    # TODO: enable failure calculation once the formulas are properly implemented
-
     m_sigma_LC1 = skin_failure_yielding(M1, t_s=t_s, t_c=t_c, skin=skin, foam=foam)
     m_sigma_LC2 = skin_failure_yielding(M2, t_s=t_s, t_c=t_c, skin=skin, foam=foam)
     m_tau_LC1 = core_shear_failure(V1, t_s=t_s, t_c=t_c, skin=skin, foam=foam)
     m_tau_LC2 = core_shear_failure(V2, t_s=t_s, t_c=t_c, skin=skin, foam=foam)
     m_wrinkling_LC1 = face_wrinkling(M1, t_s=t_s, t_c=t_c, skin=skin, foam=foam)
     m_wrinkling_LC2 = face_wrinkling(M2, t_s=t_s, t_c=t_c, skin=skin, foam=foam)
-
-    # m_sigma_LC1 = 1
-    # m_sigma_LC2 = 1
-    # m_tau_LC1 = 1
-    # m_tau_LC2 = 1
-    # m_wrinkling_LC1 = 1
-    # m_wrinkling_LC2 = 1
-# =============================================================================
 
     mass = (2*t_s*GFRP_data["rho"] + t_c*foam.density) * B * L
 

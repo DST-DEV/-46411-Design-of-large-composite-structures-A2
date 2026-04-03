@@ -162,6 +162,7 @@ E_f = np.reshape(1 / (A_11_inv * t_s), (-1, 1, 1))
 # Foam dependent parameters
 G_c = np.reshape([foam.G for foam in DIVINYCELL_H], (1, 1, -1))
 E_c = np.reshape([foam.E_t for foam in DIVINYCELL_H], (1, 1, -1))
+E_cc = np.reshape([foam.E_c for foam in DIVINYCELL_H], (1, 1, -1))
 
 # Stiffness parameters
 D = E_f * t_s_mesh * d**2 / 2
@@ -239,7 +240,7 @@ core_failure_LC1 = tau_hat_12_foam - tau_LC1
 core_failure_LC2 = tau_hat_12_foam - tau_LC2
 
 # Face wrinkling
-sigma_wrinkling = .5 * np.power(E_f * E_c * G_c, 1/3)
+sigma_wrinkling = .5 * np.power(E_f * E_cc * G_c, 1/3)
 sigma_wrinkling = np.repeat(sigma_wrinkling, len(t_c), axis=1)
 
 # Setup dataset for easy access
