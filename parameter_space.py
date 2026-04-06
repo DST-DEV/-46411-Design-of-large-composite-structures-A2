@@ -22,7 +22,8 @@ W = 4.2  # Panel width [m]
 B = 0.12  # Beam width [m]
 T_PLY_MIN , T_PLY_MAX = 2e-4, 4e-4  # Ply thickness limits [m]
 T_PLY_AVG = (T_PLY_MAX + T_PLY_MIN) / 2
-LAYUP = [0, 90, 90, 0]
+LAYUP_STR = "[0/90]_S"
+LAYUP , _ = clt.laminate.builder.StackParser.parse(LAYUP_STR)
 
 # Skin thickness search bounds [m]
 T_S_MIN, T_S_MAX = T_PLY_AVG*len(LAYUP), 18e-3  # T_PLY_AVG*N_LAYERS - 18 mm per face sheet
@@ -32,7 +33,7 @@ N_T_S = 400
 T_C_MIN, T_C_MAX = 5e-3, 150e-3   # 5 - 150 mm
 N_T_C = 400
 
-DELTA_MAX = .040  # allowable mid-span deflection [m]
+DELTA_MAX = .020  # allowable mid-span deflection [m]
 
 # ===================================================================
 # %% PARAMETER VARIATION
@@ -129,17 +130,16 @@ def layup_builder(t, sequence=[0, 90, 90, 0]):
 
 g = 9.81  # m/s2
 
-# LC1: uniform pressure 5 t/m^2
-q_a_dist = 5000.0 * g / L / W  # Total distributed load [N/m^2]
-q_LC1 = q_a_dist * B          # Line load on beam [N/m]
+# LC1: uniform pressure 5 t
+P_LC1 = 5000.0 * g
+q_LC1 = P_LC1 / W / L # Total distributed load [N/m^2]
 
 # LC2: 2-tonne patch over 120 mm at mid-span
-P_LC2   = 2000.0 * g      # Total force [N]
+P_LC2   = 2000.0 * g / W  # 'Point' load per width [N/m]
 
 # Calculate resulting cross-sectional loads
 M1 = q_LC1 * L**2 / 8
 V1 = q_LC1 * L/2
-
 V2 = P_LC2/2
 M2 = P_LC2/2 * L/2
 
@@ -171,6 +171,30 @@ S = G_c * (t_c_mesh + t_s_mesh)**2 / t_c_mesh
 # Maximum deflection
 w_LC1 = 5/384 * q_LC1*L**4 / D + q_LC1*L**2 / (8 * S)
 w_LC2 = P_LC2 * (L**3 / (48*D) + L / (4*S))
+# w_LC2_new = (L - a / 2) * q_LC2 * a * ((L ** 2 / 12 + L * a / 24 - a ** 2 / 48) * S + D) / D / S / 4
+
+# =============================================================================
+# fig, ax = plt.subplots(figsize=(5.5, 5),
+#                        constrained_layout=True)
+# cf = ax.contourf(t_s_mesh[..., -1], t_c_mesh[..., -1], w_LC2_new[..., -1],
+#                  levels=20, cmap=cmc.devon.reversed(), alpha=0.85,
+#                  zorder=1)
+# cbar = fig.colorbar(cf, ax=ax, shrink=0.85, pad=0.02)
+#
+# fig, ax = plt.subplots(figsize=(5.5, 5),
+#                        constrained_layout=True)
+# cf = ax.contourf(t_s_mesh[..., -1], t_c_mesh[..., -1], w_LC2[..., -1],
+#                  levels=20, cmap=cmc.devon.reversed(), alpha=0.85,
+#                  zorder=1)
+# cbar = fig.colorbar(cf, ax=ax, shrink=0.85, pad=0.02)
+#
+# fig, ax = plt.subplots(figsize=(5.5, 5),
+#                        constrained_layout=True)
+# cf = ax.contourf(t_s_mesh[..., -1], t_c_mesh[..., -1], (w_LC2_new - w_LC2)[..., -1],
+#                  levels=20, cmap=cmc.devon.reversed(), alpha=0.85,
+#                  zorder=1)
+# cbar = fig.colorbar(cf, ax=ax, shrink=0.85, pad=0.02)
+# =============================================================================
 
 # Skin bending stresses
 sigma_s = lambda M: M * E_f * (t_s_mesh/2 + t_c_mesh/2) / D
@@ -214,6 +238,18 @@ def failure_tsai_hill(sigma, s_hat_1, s_hat_2, t_hat_12):
     return (s1/s_hat_1)**2 - (s1*s2)/(s_hat_1**2) + (s2/s_hat_2)**2 \
         + (t12/t_hat_12)**2
 
+def failure_tsai_wu(sigma, s_hat_1t, s_hat_1c, s_hat_2t, s_hat_2c, t_hat_12):
+    s1 = sigma[..., 0]
+    s2 = sigma[..., 1]
+
+    f1 = 1/s_hat_1t - 1/s_hat_1c
+    f2 = 1/s_hat_2t - 1/s_hat_2c
+    f11 = 1/(s_hat_1t*s_hat_1c)
+    f22= 1/(s_hat_2t*s_hat_2c)
+    f12 = -.5*np.sqrt(f11*f22)
+
+    return f1*s1 + f2*s2 + f11*s1**2 + f22*s2**2 + 2*f12*s1*s2
+
 strength_tensile = (GFRP_mat.s_hat_1t, GFRP_mat.s_hat_2t, GFRP_mat.t_hat_12)
 strength_compressive = (GFRP_mat.s_hat_1c, GFRP_mat.s_hat_2c, GFRP_mat.t_hat_12)
 
@@ -227,6 +263,24 @@ tsaihill_LC2 = np.min([failure_tsai_hill(sigma_local_LC2,
                        failure_tsai_hill(-sigma_local_LC2,
                                          *strength_compressive)],
                       axis=0)
+
+strength_tensile = GFRP_mat.strength_as_dict()
+strength_comp = {key: -val for key, val in GFRP_mat.strength_as_dict().items()}
+tsaiwu_LC1 = np.min([failure_tsai_wu(sigma_local_LC1, **strength_tensile),
+                     failure_tsai_wu(-sigma_local_LC1, **strength_comp)],
+                    axis=0)
+tsaiwu_LC2 = np.min([failure_tsai_wu(sigma_local_LC2, **strength_tensile),
+                     failure_tsai_wu(-sigma_local_LC2, **strength_comp)],
+                    axis=0)
+
+# =============================================================================
+# fig, ax = plt.subplots(figsize=(5.5, 5),
+#                        constrained_layout=True)
+# cf = ax.contourf(t_s_mesh[..., -1], t_c_mesh[..., -1], tsaiwu_LC1[..., -1],
+#                  levels=20, cmap=cmc.devon.reversed(), alpha=0.85,
+#                  zorder=1)
+# cbar = fig.colorbar(cf, ax=ax, shrink=0.85, pad=0.02)
+# =============================================================================
 
 # Core shear stresses
 tau_c = lambda V: V / D * (E_f*t_s_mesh*d / 2 + E_c*t_c_mesh**2 / 2)
@@ -244,8 +298,6 @@ sigma_wrinkling = .5 * np.power(E_f * E_cc * G_c, 1/3)
 sigma_wrinkling = np.repeat(sigma_wrinkling, len(t_c), axis=1)
 
 # Setup dataset for easy access
-ds_shape = (N_T_S, N_T_C, N_FOAMS)
-
 ds = xr.Dataset(
     {
         "D": (["t_s", "t_c", "foam"], np.repeat(D, N_FOAMS, axis=2)),
@@ -255,11 +307,15 @@ ds = xr.Dataset(
         "sigma_LC1": (["t_s", "t_c", "foam"],
                       np.repeat(sigma_LC1, N_FOAMS, axis=2)),
         "sigma_LC2": (["t_s", "t_c", "foam"],
-                      np.repeat(sigma_LC1, N_FOAMS, axis=2)),
+                      np.repeat(sigma_LC2, N_FOAMS, axis=2)),
         "tsaihill_LC1": (["t_s", "t_c", "foam"],
-                         np.repeat(tsaihill_LC2, N_FOAMS, axis=2)),
+                         np.repeat(tsaihill_LC1, N_FOAMS, axis=2)),
         "tsaihill_LC2": (["t_s", "t_c", "foam"],
                          np.repeat(tsaihill_LC2, N_FOAMS, axis=2)),
+        "tsaiwu_LC1": (["t_s", "t_c", "foam"],
+                         np.repeat(tsaiwu_LC1, N_FOAMS, axis=2)),
+        "tsaiwu_LC2": (["t_s", "t_c", "foam"],
+                         np.repeat(tsaiwu_LC2, N_FOAMS, axis=2)),
         "tau_LC1": (["t_s", "t_c", "foam"], tau_LC1),
         "tau_LC2": (["t_s", "t_c", "foam"], tau_LC2),
         "core_failure_LC1": (["t_s", "t_c", "foam"], core_failure_LC1),
@@ -339,13 +395,12 @@ def plot_limit_boundary(foam, constraint_thin=True, show_legend=False):
                             - ds["sigma_LC1"].sel(foam=foam).values) >0
         cond_wrinkling_2 = (ds["sigma_wrinkle"].sel(foam=foam).values
                             - ds["sigma_LC2"].sel(foam=foam).values) >0
-        cond_thin_skin = ((t_s_mesh + t_c_mesh) / t_s_mesh)[..., 0] > 5.77
         feasible = cond_w1 & cond_w2 & cond_tsaihill_1 & cond_tsaihill_2 \
             & cond_core_failure_1 & cond_core_failure_2 & cond_wrinkling_1 \
             & cond_wrinkling_2
 
         if constraint_thin: # Enforce thin skin
-            cond_thin_skin = ((t_s_mesh + t_c_mesh) / t_s_mesh)[..., 0] > 5.77
+            cond_thin_skin = ((t_s_mm + t_c_mm) / t_s_mm) > 5.77
             feasible = feasible & cond_thin_skin
         feasible_float = feasible.astype(float)
 
@@ -422,7 +477,7 @@ def plot_limit_boundary_overlap(constraint_thin=True):
                 & cond_wrinkling_2
 
             if constraint_thin:  # Enforce thin skin
-                cond_thin_skin = ((t_s_mesh + t_c_mesh) / t_s_mesh)[..., 0] > 5.77
+                cond_thin_skin = ((t_s_mm + t_c_mm) / t_s_mm) > 5.77
                 feasible = feasible & cond_thin_skin
             feasible_float = feasible.astype(float)
 
@@ -458,7 +513,7 @@ def plot_limit_boundary_overlap(constraint_thin=True):
 
     return fig, ax
 
-fig, ax = plot_limit_boundary(DIVINYCELL_H[0].name)
-fig, ax = plot_limit_boundary(DIVINYCELL_H[-1].name)
+# fig, ax = plot_limit_boundary(DIVINYCELL_H[0].name)
+# fig, ax = plot_limit_boundary(DIVINYCELL_H[-1].name)
 fig, ax = plot_limit_boundary_overlap(constraint_thin=True)
 plt.show()

@@ -1,0 +1,415 @@
+from pathlib import Path
+from typing import List
+from dataclasses import dataclass
+
+import cmcrameri.cm as cmc
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
+from matplotlib.lines import Line2D
+import numpy as np
+import xarray as xr
+import yaml
+
+import classical_laminate_theory as clt
+import scivis
+
+# ===================================================================
+# %% PARAMETERS
+# ===================================================================
+L = 4.0  # Beam span [m]
+W = 4.2  # Panel width [m]
+
+# Cross beam geometry
+B_CROSS = 0.3  # Cross beam width [m]
+
+# Layup definition
+LAYUP_STR_PANEL = "[0/90]_S"
+LAYUP_PANEL , _ = clt.laminate.builder.StackParser.parse(LAYUP_STR_PANEL)
+N_PLIES_PANEL = len(LAYUP_PANEL)
+
+LAYUP_STR_CROSS = "[0/45/-45/0]_S"
+LAYUP_CROSS , _ = clt.laminate.builder.StackParser.parse(LAYUP_STR_CROSS)
+N_PLIES_CROSS = len(LAYUP_CROSS)
+
+# Panel skin thickness search bounds [m]
+T_PLY_MIN , T_PLY_MAX = 2e-4, 4e-4  # Ply thickness limits [m]
+T_PLY_AVG = (T_PLY_MAX + T_PLY_MIN) / 2
+T_S_MIN_PANEL, T_S_MAX_PANEL = T_PLY_AVG*N_PLIES_PANEL, 20e-3  # T_PLY_AVG*N_LAYERS - 25 mm per face sheet
+T_S_MIN_CROSS, T_S_MAX_CROSS = T_PLY_AVG*N_PLIES_CROSS, 20e-3  # T_PLY_AVG*N_LAYERS - 25 mm per face sheet
+
+N_T_S_PANEL = 400
+N_T_S_CROSS = 400
+
+# Core thickness search bounds [m]
+T_C_MIN_PANEL, T_C_MAX_PANEL = 30e-3, 120e-3   # 5 - 150 mm
+T_C_MIN_CROSS, T_C_MAX_CROSS = 15e-3, 120e-3   # 5 - 150 mm
+
+N_T_C_PANEL = 400
+N_T_C_CROSS = 400
+
+DELTA_MAX = .040  # Maximum allowable deflection (panel + cross beam) [m]
+DELTA_MAX_RATIOS = np.arange(.2, .81, .1)
+THICKNESS_MAX = .25  # Maximum allowable thickness (panel + cross beam) [m]
+
+# ===================================================================
+# %% PARAMETER VARIATION
+# ===================================================================
+
+t_s_panel = np.linspace(T_S_MIN_PANEL, T_S_MAX_PANEL, N_T_S_PANEL)
+t_c_panel = np.linspace(T_C_MIN_PANEL, T_C_MAX_PANEL, N_T_C_PANEL)
+
+t_s_cross = np.linspace(T_S_MIN_CROSS, T_S_MAX_CROSS, N_T_S_CROSS)
+t_c_cross = np.linspace(T_C_MIN_CROSS, T_C_MAX_CROSS, N_T_C_CROSS)
+
+# ===================================================================
+# %% MATERIAL DATABASE
+# ===================================================================
+
+@dataclass
+class FoamGrade:
+    name:            str
+    sigma_hat_t:  float   # Tensile strength [Pa]
+    sigma_hat_c:  float   # Compressive strength [Pa]
+    tau_hat_12:  float   # Shear strength [Pa]
+    E_c:  float   # Compressive modulus [Pa]
+    E_t:  float   # Tensile modulus [Pa]
+    G:  float   # Shear modulus [Pa]
+    gamma_12:  float   # Shear strain [-]
+    density:  float   # kg/m3
+
+# Divinycell H series
+with open(Path(__file__).parent
+          / "_data" / "Divinycell_H_properties.yml", "r") as file:
+    foam_mat = yaml.safe_load(file)
+
+FOAM_NAMES = list(foam_mat["density"].keys())
+DIVINYCELL_H: List[FoamGrade] = [
+    FoamGrade(name = foam_name,
+              sigma_hat_c = foam_mat["compressive_strength"][foam_name],
+              sigma_hat_t = foam_mat["tensile_strength"][foam_name],
+              tau_hat_12 = foam_mat["shear_strength"][foam_name],
+              E_c = foam_mat["compressive_modulus"][foam_name],
+              E_t = foam_mat["tensile_modulus"][foam_name],
+              G = foam_mat["shear_modulus"][foam_name],
+              gamma_12 = foam_mat["shear_strain"][foam_name],
+              density = foam_mat["density"][foam_name])
+    for foam_name in FOAM_NAMES
+]
+N_FOAMS = len(DIVINYCELL_H)
+
+# Load steel, wood and glass fiber material data
+with open(Path(__file__).parent
+          / "_data" / "material_properties.yml", "r") as file:
+    mat_data = yaml.safe_load(file)
+
+# Create Glass fiber material object
+GFRP_data = mat_data["GFRP"]
+GFRP_mat = clt.materials.OrthotropicLamina(E1=GFRP_data["E1"],
+                                           E2=GFRP_data["E2"],
+                                           G12=GFRP_data["G12"],
+                                           nu12=GFRP_data["nu12"],
+                                           s_hat_1t=GFRP_data["sigma_hat_1t"],
+                                           s_hat_1c=GFRP_data["sigma_hat_1c"],
+                                           s_hat_2t=GFRP_data["sigma_hat_2t"],
+                                           s_hat_2c=GFRP_data["sigma_hat_2c"],
+                                           t_hat_12=GFRP_data["tau_hat_12"],
+                                           )
+sigma_GFRP_crit = min(GFRP_data["sigma_hat_1t"], GFRP_data["sigma_hat_1c"])
+
+def layup_builder(t, sequence=[0, 90, 90, 0]):
+    """
+    Build a laminate with a specified thickness t by repeating a layup.
+
+    The thickness of each ply is determined so that it lies close to the
+    user-defined average ply thickness. Each ply of the layup is then repeated
+    to fulfill the specified thickness.
+
+    Parameters
+    ----------
+    t_s : float
+        Thickness of the laminate.
+    sequence : list | tuple, optional
+        Stacking sequence of the plies. The default is [0, 90, 90, 0].
+
+    Returns
+    -------
+    classical_laminate_theory.Laminate
+        The laminate object.
+
+    """
+    t_ply = t / len(sequence)
+    plies = [clt.Ply(material=GFRP_mat, theta=angle, thickness=t_ply)
+             for angle in sequence]
+
+    return clt.Laminate(plies)
+
+# ===================================================================
+# %% LOADS
+# ===================================================================
+
+g = 9.81  # m/s2
+
+# LC1: uniform pressure 5 t
+P_LC1 = 5000.0 * g
+q_LC1_PANEL = P_LC1 / W / L # Total distributed load [N/m^2]
+q_LC1_CROSS = P_LC1 / 2 / B_CROSS / W
+
+# LC2: 2-tonne patch over 120 mm at mid-span
+P_LC2_PANEL   = 2000.0 * g / W  # 'Point' load per width [N/m]
+P_LC2_CROSS = 2000.0 * g / 2 / B_CROSS  # 'Point' load per
+
+# ===================================================================
+# %% FULL VARIATION CALCULATION
+# ===================================================================
+
+def calc_beam(t_s, t_c, L, q_LC1, P_LC2, layup):
+    M1 = q_LC1 * L**2 / 8
+    V1 = q_LC1 * L/2
+    V2 = P_LC2/2
+    M2 = P_LC2/2 * L/2
+
+    t_s_mesh, t_c_mesh = np.meshgrid(t_s, t_c, indexing="ij")
+    t_s_mesh = t_s_mesh[..., np.newaxis]
+    t_c_mesh = t_c_mesh[..., np.newaxis]
+
+    d = t_s_mesh + t_c_mesh
+    skins = [layup_builder(t=t_s_i, sequence=layup) for t_s_i in t_s]
+
+    # Skin dependent parameters
+    A_11_inv = np.array([np.linalg.inv(skin.ABD_matrix[:3, :3])[0, 0]
+                         for skin in skins])
+    E_f = np.reshape(1 / (A_11_inv * t_s), (-1, 1, 1))
+
+    # Foam dependent parameters
+    G_c = np.reshape([foam.G for foam in DIVINYCELL_H], (1, 1, -1))
+    E_c = np.reshape([foam.E_t for foam in DIVINYCELL_H], (1, 1, -1))
+    E_cc = np.reshape([foam.E_c for foam in DIVINYCELL_H], (1, 1, -1))
+
+    # Stiffness parameters
+    D = E_f * t_s_mesh * d**2 / 2
+    S = G_c * (t_c_mesh + t_s_mesh)**2 / t_c_mesh
+
+    # Maximum deflection
+    w_LC1 = 5/384 * q_LC1*L**4 / D + q_LC1*L**2 / (8 * S)
+    w_LC2 = P_LC2 * (L**3 / (48*D) + L / (4*S))
+
+    # Skin bending stresses
+    sigma_s = lambda M: M * E_f * (t_s_mesh/2 + t_c_mesh/2) / D
+    sigma_LC1 = sigma_s(M1)
+    sigma_LC2 = sigma_s(M2)
+
+    # Laminate and ply strains
+    eps_x = lambda M: M * (t_s_mesh/2 + t_c_mesh/2) / D
+    eps_x_LC1 = eps_x(M1)
+    eps_x_LC2 = eps_x(M2)
+
+    def eps_1 (eps_x):
+        T_eps_inv = np.array([[ply.T_eps_inv[0, 0] for ply in skin.plies]
+                              for skin in skins])
+
+        return np.max(np.einsum("ij,ik->ijk", eps_x[..., 0], T_eps_inv),
+                      axis=2)[..., np.newaxis]
+
+    eps_1_LC1 = eps_1(eps_x_LC1)
+    eps_1_LC2 = eps_1(eps_x_LC2)
+
+    # Ply stresses
+    E1_local = np.array([skin.plies[0].Q_12[0, 0] for skin in skins])
+    E21_local = np.array([skin.plies[0].Q_12[1, 0] for skin in skins])
+
+    def sigma_local (eps_1):
+        return np.stack([eps_1 * E1_local[:, np.newaxis, np.newaxis],
+                         eps_1 * E21_local[:, np.newaxis, np.newaxis],
+                         np.zeros_like(eps_1)],
+                        axis=-1)
+
+    sigma_local_LC1 = sigma_local(eps_1_LC1)
+    sigma_local_LC2 = sigma_local(eps_1_LC2)
+
+    # Ply failure (Tsai-Hill)
+    def failure_tsai_hill(sigma, s_hat_1, s_hat_2, t_hat_12):
+        s1 = sigma[..., 0]
+        s2 = sigma[..., 1]
+        t12 = sigma[..., 2]
+
+        return (s1/s_hat_1)**2 - (s1*s2)/(s_hat_1**2) + (s2/s_hat_2)**2 \
+            + (t12/t_hat_12)**2
+
+    def failure_tsai_wu(sigma, s_hat_1t, s_hat_1c, s_hat_2t, s_hat_2c, t_hat_12):
+        s1 = sigma[..., 0]
+        s2 = sigma[..., 1]
+
+        f1 = 1/s_hat_1t - 1/s_hat_1c
+        f2 = 1/s_hat_2t - 1/s_hat_2c
+        f11 = 1/(s_hat_1t*s_hat_1c)
+        f22= 1/(s_hat_2t*s_hat_2c)
+        f12 = -.5*np.sqrt(f11*f22)
+
+        return f1*s1 + f2*s2 + f11*s1**2 + f22*s2**2 + 2*f12*s1*s2
+
+    strength_tensile = (GFRP_mat.s_hat_1t, GFRP_mat.s_hat_2t, GFRP_mat.t_hat_12)
+    strength_compressive = (GFRP_mat.s_hat_1c, GFRP_mat.s_hat_2c, GFRP_mat.t_hat_12)
+
+    tsaihill_LC1 = np.min([failure_tsai_hill(sigma_local_LC1,
+                                             *strength_tensile),
+                           failure_tsai_hill(-sigma_local_LC1,
+                                             *strength_compressive)],
+                          axis=0)
+    tsaihill_LC2 = np.min([failure_tsai_hill(sigma_local_LC2,
+                                             *strength_tensile),
+                           failure_tsai_hill(-sigma_local_LC2,
+                                             *strength_compressive)],
+                          axis=0)
+
+    strength_tensile = GFRP_mat.strength_as_dict()
+    strength_comp = {key: -val for key, val in GFRP_mat.strength_as_dict().items()}
+    tsaiwu_LC1 = np.min([failure_tsai_wu(sigma_local_LC1, **strength_tensile),
+                         failure_tsai_wu(-sigma_local_LC1, **strength_comp)],
+                        axis=0)
+    tsaiwu_LC2 = np.min([failure_tsai_wu(sigma_local_LC2, **strength_tensile),
+                         failure_tsai_wu(-sigma_local_LC2, **strength_comp)],
+                        axis=0)
+
+    # Core shear stresses
+    tau_c = lambda V: V / D * (E_f*t_s_mesh*d / 2 + E_c*t_c_mesh**2 / 2)
+    tau_LC1 = tau_c(V1)
+    tau_LC2 = tau_c(V2)
+
+    # Core shear failure
+    tau_hat_12_foam = np.reshape([foam.tau_hat_12 for foam in DIVINYCELL_H],
+                                 (1, 1, -1))
+    core_failure_LC1 = tau_hat_12_foam - tau_LC1
+    core_failure_LC2 = tau_hat_12_foam - tau_LC2
+
+    # Face wrinkling
+    sigma_wrinkling = .5 * np.power(E_f * E_cc * G_c, 1/3)
+    sigma_wrinkling = np.repeat(sigma_wrinkling, len(t_c), axis=1)
+
+    # Setup dataset for easy access
+    ds = xr.Dataset(
+        {
+            "D": (["t_s", "t_c", "foam"], np.repeat(D, N_FOAMS, axis=2)),
+            "S": (["t_s", "t_c", "foam"], S),
+            "w_LC1": (["t_s", "t_c", "foam"], w_LC1),
+            "w_LC2": (["t_s", "t_c", "foam"], w_LC2),
+            "sigma_LC1": (["t_s", "t_c", "foam"],
+                          np.repeat(sigma_LC1, N_FOAMS, axis=2)),
+            "sigma_LC2": (["t_s", "t_c", "foam"],
+                          np.repeat(sigma_LC2, N_FOAMS, axis=2)),
+            "tsaihill_LC1": (["t_s", "t_c", "foam"],
+                             np.repeat(tsaihill_LC1, N_FOAMS, axis=2)),
+            "tsaihill_LC2": (["t_s", "t_c", "foam"],
+                             np.repeat(tsaihill_LC2, N_FOAMS, axis=2)),
+            "tsaiwu_LC1": (["t_s", "t_c", "foam"],
+                             np.repeat(tsaiwu_LC1, N_FOAMS, axis=2)),
+            "tsaiwu_LC2": (["t_s", "t_c", "foam"],
+                             np.repeat(tsaiwu_LC2, N_FOAMS, axis=2)),
+            "tau_LC1": (["t_s", "t_c", "foam"], tau_LC1),
+            "tau_LC2": (["t_s", "t_c", "foam"], tau_LC2),
+            "core_failure_LC1": (["t_s", "t_c", "foam"], core_failure_LC1),
+            "core_failure_LC2": (["t_s", "t_c", "foam"], core_failure_LC2),
+            "sigma_wrinkle": (["t_s", "t_c", "foam"], sigma_wrinkling),
+        },
+        coords={
+            "t_s": t_s,
+            "t_c": t_c,
+            "foam": FOAM_NAMES,
+        },
+    )
+
+    return ds
+
+ds_panel = calc_beam(t_s=t_s_panel, t_c=t_c_panel, L=L,
+                     q_LC1=q_LC1_PANEL, P_LC2=P_LC2_PANEL, layup=LAYUP_PANEL)
+ds_cross = calc_beam(t_s=t_s_cross, t_c=t_c_cross, L=W,
+                     q_LC1=q_LC1_CROSS, P_LC2=P_LC2_CROSS, layup=LAYUP_CROSS)
+
+# ===================================================================
+# %% PLOT COMPARISONS
+# ===================================================================
+
+rc_params = scivis.rcparams._prepare_rcparams()
+
+delta_max_panel = DELTA_MAX * DELTA_MAX_RATIOS
+delta_max_cross = DELTA_MAX * (1 - DELTA_MAX_RATIOS)
+delta_max_lgd = [r"$w_\text{lim, panel}=" + f"{ratio:.1f}" + r"w_\text{lim}$"
+                 for ratio in DELTA_MAX_RATIOS]
+
+def plot_limit_boundary_overlap(foam=FOAM_NAMES[-1], constraint_thin=True):
+    rc_params = {"font.family": "serif",
+                 "font.sans-serif": ["Times New Roman"],
+                 'mathtext.fontset': 'cm'}
+
+    ds = ds_panel
+    with mpl.rc_context(rc_params):
+        fig, ax = plt.subplots(figsize=(5.5, 5),
+                               constrained_layout=True)
+
+        # Coordinate grids in mm for display
+        t_s_mm, t_c_mm = np.meshgrid(ds.t_s.values * 1e3,
+                                     ds.t_c.values * 1e3, indexing="ij")
+        t_total = 2 * t_s_mm + t_c_mm
+
+        # Contour fill: total thickness
+        cf = ax.contourf(t_s_mm, t_c_mm, t_total,
+                         levels=20, cmap=cmc.devon.reversed(), alpha=0.85,
+                         zorder=1)
+
+        legend_elements = []
+        # colors = mpl.colormaps['autumn'](np.linspace(0, 1, N_FOAMS))
+        colors = cmc.lajolla.reversed()(np.linspace(0, 1, N_FOAMS))
+        cond_tsaihill_1 = ds["tsaihill_LC1"].sel(foam=foam).values >0
+        cond_tsaihill_2 = ds["tsaihill_LC2"].sel(foam=foam).values >0
+        cond_core_failure_1 = ds["core_failure_LC1"].sel(foam=foam).values >0
+        cond_core_failure_2 = ds["core_failure_LC2"].sel(foam=foam).values >0
+        cond_wrinkling_1 = (ds["sigma_wrinkle"].sel(foam=foam).values
+                            - ds["sigma_LC1"].sel(foam=foam).values) >0
+        cond_wrinkling_2 = (ds["sigma_wrinkle"].sel(foam=foam).values
+                            - ds["sigma_LC2"].sel(foam=foam).values) >0
+
+        for i, delta_max_i in enumerate(delta_max_panel):
+            # Feasibility mask (both limits satisfied)
+            cond_w1 = ds["w_LC1"].sel(foam=foam).values <= delta_max_i
+            cond_w2 = ds["w_LC2"].sel(foam=foam).values <= delta_max_i
+
+            feasible = cond_w1 & cond_w2 & cond_tsaihill_1 & cond_tsaihill_2 \
+                & cond_core_failure_1 & cond_core_failure_2 & cond_wrinkling_1 \
+                & cond_wrinkling_2
+
+            if constraint_thin:  # Enforce thin skin
+                cond_thin_skin = ((t_s_mm + t_c_mm) / t_s_mm) > 5.77
+                feasible = feasible & cond_thin_skin
+            feasible_float = feasible.astype(float)
+
+            # Constraing boundary line
+            ax.contour(t_s_mm, t_c_mm, feasible_float, levels=[0.5],
+                       colors=[colors[i]], linewidths=2, zorder=4)
+
+            legend_elements.append(
+                Line2D([0], [0], color=colors[i], lw=2.5, ls="-",
+                       label=delta_max_lgd[i]))
+
+        # Hatch overlay on the feasible region (only of the densest foam)
+        ax.contourf(t_s_mm, t_c_mm, feasible_float, levels=[0.5, 1.5],
+                    colors="none", hatches=["////"], alpha=0.0, zorder=3)
+
+        # Axes ticks
+        ax.set_xlabel(r"$t_s\:\text{[mm]}$", fontsize=13)
+        ax.set_ylabel(r"$t_c\:\text{[mm]}$", fontsize=13)
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.1f}"))
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.0f}"))
+        ax.grid(visible=True, color="0.85", linewidth=0.5, alpha=0.4, zorder=2)
+
+        # Colorbar
+        cbar = fig.colorbar(cf, ax=ax, shrink=0.85, pad=0.02)
+        cbar.set_label(r"$t_\text{beam}\:\text{[mm]}$", fontsize=14)
+
+        fig.legend(handles=legend_elements, loc="center left",
+                   fontsize=10, framealpha=0.9,
+                   bbox_to_anchor=(1.02, .5))
+
+    return fig, ax
+
+fig, ax = plot_limit_boundary_overlap(constraint_thin=True)
+plt.show()

@@ -154,14 +154,11 @@ def layup_builder(t, sequence=[0, 90, 90, 0]):
 
 g = 9.81  # m/s2
 
-# LC1: uniform pressure 5 t/m^2
-q_a_dist = 5000.0 * g / L / W  # Total distributed load [N/m^2]
-q_LC1 = q_a_dist * B          # Line load on beam [N/m]
+# LC1: uniform pressure 5 t
+q_LC1 = 5000.0 * g / L  # Total distributed load [N/m^2]
 
 # LC2: 2-tonne patch over 120 mm at mid-span
 P_LC2   = 2000.0 * g      # Total force [N]
-# a_patch = 0.120           # Patch length [m]
-# q_LC2   = P_LC2 / a_patch**2 * b  # Intensity over patch [N/m]
 
 # ===================================================================
 # %% SANDWICH BEAM MECHANICS
@@ -446,7 +443,7 @@ def optimise_for_foam(foam):
         if res.success or res.fun < 1e10:
             r = evaluate(res.x[0], res.x[1], foam)
             if r and feasible(r):
-                if best is None or r['mass'] < best['mass']:
+                if best is None or r['t_total'] < best['t_total']:
                     best = r
 
     # Differential Evolution fallback
@@ -530,7 +527,7 @@ def run():
     print(f"\n  Foam               : {r['foam']}")
     print(f"  Skin thickness     : {r['t_skin']*1e3:.2f} mm  per face")
     print(f"  Core thickness     : {r['t_core']*1e3:.1f} mm")
-    print(f"  Total beam height  : {r['t_total']*1e3:.1f} mm")
+    print(f"  Total beam thickness  : {r['t_total']*1e3:.1f} mm")
     print(f"  Total beam mass    : {r['mass']:.2f} kg")
 
     print(f"\n  {'Constraint':<32} {'LC1':>9} {'LC2':>9} {'Limit':>10}  Status")
