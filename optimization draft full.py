@@ -53,6 +53,7 @@ L = 4.0  # Beam span [m]
 W = 4.2  # Panel width [m]
 
 # Cross beam geometry
+L_CROSS = 4.7  # Cross beam length [m]
 B_CROSS = 0.3  # Cross beam width [m]
 
 # Layup definition
@@ -68,15 +69,15 @@ N_PLIES_CROSS = len(LAYUP_CROSS)
 T_PLY_MIN , T_PLY_MAX = 2e-4, 4e-4  # Ply thickness limits [m]
 T_PLY_AVG = (T_PLY_MAX + T_PLY_MIN) / 2
 T_S_MIN_PANEL, T_S_MAX_PANEL = T_PLY_AVG*N_PLIES_PANEL, 20e-3  # T_PLY_AVG*N_LAYERS - 25 mm per face sheet
-T_S_MIN_CROSS, T_S_MAX_CROSS = T_PLY_AVG*N_PLIES_CROSS, 20e-3  # T_PLY_AVG*N_LAYERS - 25 mm per face sheet
+T_S_MIN_CROSS, T_S_MAX_CROSS = T_PLY_AVG*N_PLIES_CROSS, 35e-3  # T_PLY_AVG*N_LAYERS - 25 mm per face sheet
 
 # Core thickness search bounds [m]
-T_C_MIN_PANEL, T_C_MAX_PANEL = 30e-3, 120e-3   # 5 - 150 mm
-T_C_MIN_CROSS, T_C_MAX_CROSS = 15e-3, 120e-3   # 5 - 150 mm
+T_C_MIN_PANEL, T_C_MAX_PANEL = 30e-3, 100e-3   # 5 - 150 mm
+T_C_MIN_CROSS, T_C_MAX_CROSS = 50e-3, 180e-3   # 5 - 150 mm
 
 DELTA_MAX = .040  # Maximum allowable deflection (panel + cross beam) [m]
 THICKNESS_MAX = .25  # Maximum allowable thickness (panel + cross beam) [m]
-N_RESTARTS = 6  # Grid restarts per foam grade per axis. Total starts = N_RESTARTS^2.
+N_RESTARTS = 8  # Grid restarts per foam grade per axis. Total starts = N_RESTARTS^2.
 
 # ===================================================================
 # %% MATERIAL DATABASE
@@ -218,6 +219,13 @@ def deflection_uniform(q, D, S, L):
     """
     return 5/384 * q * (L**4 / D + L**2 / (8 * S))
 
+def deflection_uniform_patch(q, D, S, L, a):
+    """
+    Mid-span deflection of a simply supported sandwich beam under uniform
+    pressure q over a patch with length a [N/m]:
+    """
+    return ((L ** 2 / 12 + L * a / 24 - a ** 2 / 48) * S + D) * a * (L - a / 2) * q / D / S / 4
+
 def deflection_point(P, D, S, L):
     """
     Mid-span deflection under a symmetric patch load of intensity w_LC2 [N/m]
@@ -330,8 +338,8 @@ M2_PANEL = P_LC2_PANEL/2 * L/2
 V_PANEL_CRIT = max(V1_PANEL, V2_PANEL)
 M_PANEL_CRIT = max(M1_PANEL, M2_PANEL)
 
-V1_CROSS = q_LC1_CROSS * L**2 / 8
-M1_CROSS = q_LC1_CROSS * L/2
+V1_CROSS = W * q_LC1_CROSS / 2
+M1_CROSS = W * q_LC1_CROSS * (2 * L_CROSS - W) / 8
 V2_CROSS = P_LC2_CROSS/2
 M2_CROSS = P_LC2_CROSS/2 * W/2
 
@@ -371,9 +379,9 @@ def evaluate(t_s_panel, t_c_panel, t_s_cross, t_c_cross, foam):
             d1 = deflection_uniform(q_LC1_PANEL, D, S, L_beam)
             d2 = deflection_point(P_LC2_PANEL, D, S, L_beam)
         else:
-            L_beam = W
+            L_beam = L_CROSS
             B_beam = B_CROSS
-            d1 = deflection_uniform(q_LC1_CROSS, D, S, L_beam)
+            d1 = deflection_uniform_patch(q_LC1_CROSS, D, S, L_CROSS, W)
             d2 = deflection_point(P_LC2_CROSS, D, S, L_beam)
 
         mass = (2*t_s*GFRP_data["rho"] + t_c*foam.density) * B_beam * L_beam
@@ -476,7 +484,7 @@ def optimise_for_foam(foam):
         {'type': 'ineq',  # Total deflection LC1
          'fun': lambda x: (DELTA_MAX
                            - deflection_uniform(q_LC1_PANEL, *stiffness(x[0], x[1], layup_builder(x[0], LAYUP_PANEL), foam), L)
-                           - deflection_uniform(q_LC1_CROSS, *stiffness(x[2], x[3], layup_builder(x[2], LAYUP_CROSS), foam), W)
+                           - deflection_uniform_patch(q_LC1_CROSS, *stiffness(x[2], x[3], layup_builder(x[2], LAYUP_CROSS), foam), L_CROSS, W)
                            )},
         {'type': 'ineq',  # Total deflection LC2
          'fun': lambda x: (DELTA_MAX

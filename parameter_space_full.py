@@ -22,6 +22,7 @@ W = 4.2  # Panel width [m]
 
 # Cross beam geometry
 B_CROSS = 0.3  # Cross beam width [m]
+L_CROSS = 4.7  # Cross beam length [m]
 
 # Layup definition
 LAYUP_STR_PANEL = "[0/90]_S"
@@ -36,14 +37,14 @@ N_PLIES_CROSS = len(LAYUP_CROSS)
 T_PLY_MIN , T_PLY_MAX = 2e-4, 4e-4  # Ply thickness limits [m]
 T_PLY_AVG = (T_PLY_MAX + T_PLY_MIN) / 2
 T_S_MIN_PANEL, T_S_MAX_PANEL = T_PLY_AVG*N_PLIES_PANEL, 20e-3  # T_PLY_AVG*N_LAYERS - 25 mm per face sheet
-T_S_MIN_CROSS, T_S_MAX_CROSS = T_PLY_AVG*N_PLIES_CROSS, 20e-3  # T_PLY_AVG*N_LAYERS - 25 mm per face sheet
+T_S_MIN_CROSS, T_S_MAX_CROSS = T_PLY_AVG*N_PLIES_CROSS, 35e-3  # T_PLY_AVG*N_LAYERS - 25 mm per face sheet
 
 N_T_S_PANEL = 400
 N_T_S_CROSS = 400
 
 # Core thickness search bounds [m]
-T_C_MIN_PANEL, T_C_MAX_PANEL = 30e-3, 120e-3   # 5 - 150 mm
-T_C_MIN_CROSS, T_C_MAX_CROSS = 15e-3, 120e-3   # 5 - 150 mm
+T_C_MIN_PANEL, T_C_MAX_PANEL = 30e-3, 100e-3   # 5 - 150 mm
+T_C_MIN_CROSS, T_C_MAX_CROSS = 15e-3, 180e-3   # 5 - 150 mm
 
 N_T_C_PANEL = 400
 N_T_C_CROSS = 400
@@ -163,9 +164,9 @@ P_LC2_CROSS = 2000.0 * g / 2 / B_CROSS  # 'Point' load per
 # %% FULL VARIATION CALCULATION
 # ===================================================================
 
-def calc_beam(t_s, t_c, L, q_LC1, P_LC2, layup):
-    M1 = q_LC1 * L**2 / 8
-    V1 = q_LC1 * L/2
+def calc_beam(t_s, t_c, L, l_patch, q_LC1, P_LC2, layup):
+    M1 = l_patch * q_LC1 * (2 * L - l_patch) / 8
+    V1 = q_LC1 * l_patch/2
     V2 = P_LC2/2
     M2 = P_LC2/2 * L/2
 
@@ -191,7 +192,9 @@ def calc_beam(t_s, t_c, L, q_LC1, P_LC2, layup):
     S = G_c * (t_c_mesh + t_s_mesh)**2 / t_c_mesh
 
     # Maximum deflection
-    w_LC1 = 5/384 * q_LC1*L**4 / D + q_LC1*L**2 / (8 * S)
+    # w_LC1 = 5/384 * q_LC1*L**4 / D + q_LC1*L**2 / (8 * S)
+    w_LC1 = ((L ** 2 / 12 + L * l_patch / 24 - l_patch ** 2 / 48) * S + D) \
+        * q_LC1 * l_patch * (L - l_patch / 2) / D / S / 4
     w_LC2 = P_LC2 * (L**3 / (48*D) + L / (4*S))
 
     # Skin bending stresses
@@ -320,9 +323,9 @@ def calc_beam(t_s, t_c, L, q_LC1, P_LC2, layup):
 
     return ds
 
-ds_panel = calc_beam(t_s=t_s_panel, t_c=t_c_panel, L=L,
+ds_panel = calc_beam(t_s=t_s_panel, t_c=t_c_panel, L=L, l_patch=L,
                      q_LC1=q_LC1_PANEL, P_LC2=P_LC2_PANEL, layup=LAYUP_PANEL)
-ds_cross = calc_beam(t_s=t_s_cross, t_c=t_c_cross, L=W,
+ds_cross = calc_beam(t_s=t_s_cross, t_c=t_c_cross, L=L_CROSS, l_patch=W,
                      q_LC1=q_LC1_CROSS, P_LC2=P_LC2_CROSS, layup=LAYUP_CROSS)
 
 # ===================================================================
@@ -336,12 +339,11 @@ delta_max_cross = DELTA_MAX * (1 - DELTA_MAX_RATIOS)
 delta_max_lgd = [r"$w_\text{lim, panel}=" + f"{ratio:.1f}" + r"w_\text{lim}$"
                  for ratio in DELTA_MAX_RATIOS]
 
-def plot_limit_boundary_overlap(foam=FOAM_NAMES[-1], constraint_thin=True):
+def plot_limit_boundary_overlap(ds, foam=FOAM_NAMES[-1], constraint_thin=True):
     rc_params = {"font.family": "serif",
                  "font.sans-serif": ["Times New Roman"],
                  'mathtext.fontset': 'cm'}
 
-    ds = ds_panel
     with mpl.rc_context(rc_params):
         fig, ax = plt.subplots(figsize=(5.5, 5),
                                constrained_layout=True)
@@ -411,5 +413,6 @@ def plot_limit_boundary_overlap(foam=FOAM_NAMES[-1], constraint_thin=True):
 
     return fig, ax
 
-fig, ax = plot_limit_boundary_overlap(constraint_thin=True)
+fig, ax = plot_limit_boundary_overlap(ds=ds_panel, constraint_thin=True)
+fig, ax = plot_limit_boundary_overlap(ds=ds_cross, constraint_thin=True)
 plt.show()
