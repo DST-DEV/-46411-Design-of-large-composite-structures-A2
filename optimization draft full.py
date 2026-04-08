@@ -129,7 +129,10 @@ GFRP_mat = clt.materials.OrthotropicLamina(E1=GFRP_data["E1"],
                                            s_hat_2c=GFRP_data["sigma_hat_2c"],
                                            t_hat_12=GFRP_data["tau_hat_12"],
                                            )
-sigma_hat_GFRP = GFRP_mat.strength_as_dict()
+sigma_hat_GFRP_tensile = GFRP_mat.strength_as_dict()
+sigma_hat_GFRP_comp = {key:-value for key, value in
+                       GFRP_mat.strength_as_dict().items()}
+sigma_hat_GFRP_comp["t_hat_12"] = -sigma_hat_GFRP_comp["t_hat_12"]
 
 def layup_builder(t, sequence=[0, 90, 90, 0]):
     """
@@ -286,11 +289,19 @@ def skin_failure_yielding(M, t_s, t_c, skin, foam):
                                             foam=foam)
 
     idx_tsaihill_tension = clt.failure.TsaiHill.failure_index(
-        stress=sigma_local_max, **sigma_hat_GFRP)
+        stress=sigma_local_max, **sigma_hat_GFRP_tensile)
     idx_tsaihill_compression = clt.failure.TsaiHill.failure_index(
-        stress=-sigma_local_max, **sigma_hat_GFRP)
+        stress=-sigma_local_max, **sigma_hat_GFRP_tensile)
+    idx_tsaiwu_tension = clt.failure.TsaiWu.failure_index(
+        stress=sigma_local_max, **sigma_hat_GFRP_tensile)
+    idx_tsaiwu_compression = clt.failure.TsaiWu.failure_index(
+        stress=-sigma_local_max, **sigma_hat_GFRP_comp)
 
-    return min(idx_tsaihill_tension, idx_tsaihill_compression)
+    failure_idx = min(idx_tsaihill_tension, idx_tsaihill_compression,
+                      idx_tsaiwu_tension,  idx_tsaiwu_compression
+                      )
+
+    return failure_idx
 
 def core_shear_failure(V, t_s, t_c, skin, foam):
     tau_12 = core_shear_stress_standalone(V=V, t_s=t_s, t_c=t_c, skin=skin,
