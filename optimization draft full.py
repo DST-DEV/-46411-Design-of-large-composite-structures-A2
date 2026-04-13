@@ -57,11 +57,11 @@ L_CROSS = 4.7  # Cross beam length [m]
 B_CROSS = 0.3  # Cross beam width [m]
 
 # Layup definition
-LAYUP_STR_PANEL = "[0/90]_S"
+LAYUP_STR_PANEL = "[0]"
 LAYUP_PANEL , _ = clt.laminate.builder.StackParser.parse(LAYUP_STR_PANEL)
 N_PLIES_PANEL = len(LAYUP_PANEL)
 
-LAYUP_STR_CROSS = "[0/45/-45/0]_S"
+LAYUP_STR_CROSS = "[0]"
 LAYUP_CROSS , _ = clt.laminate.builder.StackParser.parse(LAYUP_STR_CROSS)
 N_PLIES_CROSS = len(LAYUP_CROSS)
 
@@ -174,8 +174,10 @@ q_LC1_PANEL = P_LC1 / W / L # Total distributed load [N/m^2]
 q_LC1_CROSS = P_LC1 / 2 / B_CROSS / W
 
 # LC2: 2-tonne patch over 120 mm at mid-span
+l_patch = 120e-3  # Patch length over which the load is applied
+q_LC2 = 2000.0 * g / l_patch**2
 P_LC2_PANEL   = 2000.0 * g / W  # 'Point' load per width [N/m]
-P_LC2_CROSS = 2000.0 * g / 2 / B_CROSS  # 'Point' load per
+P_LC2_CROSS = 2000.0 * g / 2 / B_CROSS  # 'Point' load per width [N/m]
 
 # ===================================================================
 # %% SANDWICH BEAM MECHANICS
@@ -328,6 +330,9 @@ def face_wrinkling(M, t_s, t_c, skin, foam):
 
     return sigma_wrinkling - sigma_max
 
+def core_indentation(q, foam):
+    return foam.sigma_hat_c - q
+
 
 # Pre-compute moments and shears (since they are geometry-independent)
 M1_PANEL = q_LC1_PANEL * L**2 / 8
@@ -430,6 +435,9 @@ def evaluate(t_s_panel, t_c_panel, t_s_cross, t_c_cross, foam):
             "m_wrinkling_LC2": m_wrinkling_LC2
             }
 
+    # Indentation of panels
+    out_dict["m_indent"] = core_indentation(q_LC2, foam)
+
     # Total mass
     out_dict["mass_total"] = out_dict["panel"]["mass"] \
              + out_dict["cross"]["mass"]
@@ -515,6 +523,8 @@ def optimise_for_foam(foam):
          'fun': lambda x: face_wrinkling(M_CROSS_CRIT, x[2], x[3],
                                          layup_builder(x[2], LAYUP_CROSS),
                                          foam)},
+        {'type': 'ineq',  # Indentation of panels
+         'fun': lambda x: core_indentation(q_LC2, foam)},
     ]
     bounds = [(T_S_MIN_PANEL, T_S_MAX_PANEL), (T_C_MIN_PANEL, T_C_MAX_PANEL),
               (T_S_MIN_CROSS, T_S_MAX_CROSS), (T_C_MIN_CROSS, T_C_MAX_CROSS)]
@@ -685,6 +695,10 @@ def run():
           f"{r['cross']['sig_wrinkling']*1e-6:>9.4f} "
           f"  {ok2(r['cross']['m_wrinkling_LC1'], r['cross']['m_wrinkling_LC2'])}")
 
+    print(f"  {'Panel indentation':<40} "
+          + f"{r['m_indent']:>9.2f} " + " "*18
+          + f"  {ok(r['m_indent'])}")
+
     if len(all_feasible) > 1:
         print()
         sep()
@@ -715,6 +729,7 @@ def run():
                                       d["panel"]['m_wrinkling_LC2'],
                                       d["cross"]['m_wrinkling_LC1'],
                                       d["cross"]['m_wrinkling_LC2'])*1e3,
+                'Panel indentation': d["m_indent"]*1e3
             }
             active = min(margins, key=margins.get)
             tag = " <- optimal" if d is best_design else ""
