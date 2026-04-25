@@ -61,18 +61,19 @@ THICKNESS_MAX = .25  # Maximum allowable thickness (panel + cross beam) [m]
 # Final design selected from the trade-off study:
 # Foam: H130
 # Skin layup: [0^5/+45/-45]_S
-# Panel: t_f = 11.7 mm, t_c = 55.5 mm
-# Cross-beam: t_f = 22.5 mm, t_c = 107.0 mm
+# Panel: t_f = 12.0 mm, t_c = 57.5 mm
+# Cross-beam: t_f = 24.5 mm, t_c = 116.0 mm
+
 SELECTED_CASE_PANEL = {
-    "t_s": 11.7e-3,
-    "t_c": 55.5e-3,
+    "t_s": 12.0e-3,
+    "t_c": 57.5e-3,
     "foam": "H130",
     "load_case": "LC1",
 }
 
 SELECTED_CASE_CROSS = {
-    "t_s": 22.5e-3,
-    "t_c": 107.0e-3,
+    "t_s": 24.5e-3,
+    "t_c": 116.0e-3,
     "foam": "H130",
     "load_case": "LC1",
 }
@@ -187,9 +188,11 @@ def layup_builder(t, sequence=[0, 90, 90, 0]):
 g = 9.81  # m/s2
 
 # LC1: uniform pressure 5 t
-P_LC1 = 5000.0 * g
-q_LC1_PANEL = P_LC1 / W / L # Total distributed load [N/m^2]
-q_LC1_CROSS = P_LC1 / 2 / B_CROSS / W
+P_LC1_P = (5000.0 + 868.14) * g
+P_LC1_CB = (5000.0 + 868.14 + 140.17) * g 
+q_LC1_PANEL = P_LC1_P / W / L # Total distributed load [N/m^2]
+q_LC1_CROSS = P_LC1_CB / 2 / B_CROSS / W
+
 
 # LC2: 2-tonne patch over 120 mm at mid-span
 P_LC2_PANEL   = 2000.0 * g / W  # 'Point' load per width [N/m]
@@ -655,4 +658,3 @@ profile_cross = build_through_thickness_profile(
 plot_through_thickness_profile(profile_panel, title_prefix="Panel")
 plot_through_thickness_profile(profile_cross, title_prefix="Cross-beam")
 plt.show()
-
