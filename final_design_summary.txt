@@ -1,0 +1,80 @@
+
+============================================================
+PANEL CASE
+============================================================
+Foam grade: H130
+Skin thickness t_s = 11.70 mm
+Core thickness t_c = 55.50 mm
+
+--- Global stiffness and deflection ---
+D = 8.912e+05 N m
+S = 4.068e+06 N
+w_LC1 = 14.501 mm
+w_LC2 = 8.137 mm
+
+--- Skin stresses and ply failure ---
+sigma_LC1 = 8.604 MPa
+sigma_LC2 = 5.865 MPa
+Tsai-Hill LC1 = 0.0002
+Tsai-Hill LC2 = 0.0001
+Tsai-Wu LC1 = 0.0425
+Tsai-Wu LC2 = 0.0289
+
+--- Core shear check ---
+tau_LC1 = 0.103 MPa
+Core shear reserve LC1 = 2.097 MPa
+CORE SHEAR STATUS LC1 = OK
+tau_LC2 = 0.035 MPa
+Core shear reserve LC2 = 2.165 MPa
+CORE SHEAR STATUS LC2 = OK
+
+--- Core indentation check ---
+Core indentation stress LC2 = 0.039 MPa
+Core indentation reserve LC2 = 2.961 MPa
+CORE INDENTATION STATUS LC2 = OK
+
+--- Face wrinkling check ---
+Face wrinkling reserve LC1 = 319.679 MPa
+FACE WRINKLING STATUS LC1 = OK
+Face wrinkling reserve LC2 = 322.418 MPa
+FACE WRINKLING STATUS LC2 = OK
+
+============================================================
+CROSS-BEAM CASE
+============================================================
+Foam grade: H130
+Skin thickness t_s = 22.50 mm
+Core thickness t_c = 107.00 mm
+
+--- Global stiffness and deflection ---
+D = 6.363e+06 N m
+S = 7.837e+06 N
+w_LC1 = 31.185 mm
+w_LC2 = 16.018 mm
+
+--- Skin stresses and ply failure ---
+sigma_LC1 = 21.635 MPa
+sigma_LC2 = 13.018 MPa
+Tsai-Hill LC1 = 0.0014
+Tsai-Hill LC2 = 0.0005
+Tsai-Wu LC1 = 0.1081
+Tsai-Wu LC2 = 0.0645
+
+--- Core shear check ---
+tau_LC1 = 0.382 MPa
+Core shear reserve LC1 = 1.818 MPa
+CORE SHEAR STATUS LC1 = OK
+tau_LC2 = 0.127 MPa
+Core shear reserve LC2 = 2.073 MPa
+CORE SHEAR STATUS LC2 = OK
+
+--- Core indentation check ---
+Core indentation stress LC2 = 0.273 MPa
+Core indentation reserve LC2 = 2.728 MPa
+CORE INDENTATION STATUS LC2 = OK
+
+--- Face wrinkling check ---
+Face wrinkling reserve LC1 = 306.648 MPa
+FACE WRINKLING STATUS LC1 = OK
+Face wrinkling reserve LC2 = 315.265 MPa
+FACE WRINKLING STATUS LC2 = OK

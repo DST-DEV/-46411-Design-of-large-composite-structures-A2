@@ -65,15 +65,15 @@ THICKNESS_MAX = .25  # Maximum allowable thickness (panel + cross beam) [m]
 # Cross-beam: t_f = 24.5 mm, t_c = 116.0 mm
 
 SELECTED_CASE_PANEL = {
-    "t_s": 12.0e-3,
-    "t_c": 57.5e-3,
+    "t_s": 11.7e-3,
+    "t_c": 55.5e-3,
     "foam": "H130",
     "load_case": "LC1",
 }
 
 SELECTED_CASE_CROSS = {
-    "t_s": 24.5e-3,
-    "t_c": 116.0e-3,
+    "t_s": 22.5e-3,
+    "t_c": 107.0e-3,
     "foam": "H130",
     "load_case": "LC1",
 }
@@ -195,8 +195,9 @@ q_LC1_CROSS = P_LC1_CB / 2 / B_CROSS / W
 
 
 # LC2: 2-tonne patch over 120 mm at mid-span
-P_LC2_PANEL   = 2000.0 * g / W  # 'Point' load per width [N/m]
-P_LC2_CROSS = 2000.0 * g / 2 / B_CROSS  # 'Point' load per
+PATCH_LENGTH = 0.12  # Patch contact length [m]
+P_LC2_PANEL = 2000.0 * g / W  # Line load per unit width [N/m]
+P_LC2_CROSS = 2000.0 * g / 2 / B_CROSS  # Line load per unit width [N/m]
 
 # ===================================================================
 # %% FULL VARIATION CALCULATION
@@ -354,11 +355,22 @@ def calc_beam(t_s, t_c, L, l_patch, q_LC1, P_LC2, layup):
     tau_LC1 = tau_c(V1)
     tau_LC2 = tau_c(V2)
 
-    # Core shear failure
+    # Core shear reserve
     tau_hat_12_foam = np.reshape([foam.tau_hat_12 for foam in DIVINYCELL_H],
-                                 (1, 1, -1))
-    core_failure_LC1 = tau_hat_12_foam - tau_LC1
-    core_failure_LC2 = tau_hat_12_foam - tau_LC2
+                             (1, 1, -1))
+    core_shear_reserve_LC1 = tau_hat_12_foam - tau_LC1
+    core_shear_reserve_LC2 = tau_hat_12_foam - tau_LC2
+    
+    # Keep old names for compatibility with previous checks
+    core_failure_LC1 = core_shear_reserve_LC1
+    core_failure_LC2 = core_shear_reserve_LC2
+    
+    # Core indentation check under LC2 patch load
+    sigma_indentation_LC2 = P_LC2 / PATCH_LENGTH
+    sigma_hat_c_foam = np.reshape([foam.sigma_hat_c for foam in DIVINYCELL_H],
+                              (1, 1, -1))
+    core_indentation_LC2 = np.ones_like(D) * sigma_indentation_LC2
+    core_indentation_reserve_LC2 = sigma_hat_c_foam - core_indentation_LC2
 
     # Face wrinkling
     sigma_wrinkling = .5 * np.power(E_f * E_cc * G_c, 1/3)
@@ -415,6 +427,10 @@ def calc_beam(t_s, t_c, L, l_patch, q_LC1, P_LC2, layup):
             "tau_LC2": (["t_s", "t_c", "foam"], tau_LC2),
             "core_failure_LC1": (["t_s", "t_c", "foam"], core_failure_LC1),
             "core_failure_LC2": (["t_s", "t_c", "foam"], core_failure_LC2),
+            "core_shear_reserve_LC1": (["t_s", "t_c", "foam"], core_shear_reserve_LC1),
+            "core_shear_reserve_LC2": (["t_s", "t_c", "foam"], core_shear_reserve_LC2),
+            "core_indentation_LC2": (["t_s", "t_c", "foam"], core_indentation_LC2),
+            "core_indentation_reserve_LC2": (["t_s", "t_c", "foam"], core_indentation_reserve_LC2),
             "sigma_wrinkle": (["t_s", "t_c", "foam"], sigma_wrinkling),
         },
         coords={
@@ -523,24 +539,71 @@ def build_through_thickness_profile(ds, layup, foam_name, t_s_idx, t_c_idx,
 # ===================================================================
 
 def summarize_single_case(ds, case_name, foam_name):
-    print(f"\n--- {case_name} ---")
-    print(f"Foam grade: {foam_name}")
-    print(f"Skin thickness t_s = {float(ds.t_s.values[0])*1e3:.2f} mm")
-    print(f"Core thickness t_c = {float(ds.t_c.values[0])*1e3:.2f} mm")
-    print(f"D = {ds['D'].sel(foam=foam_name).values.item():.3e} N m")
-    print(f"S = {ds['S'].sel(foam=foam_name).values.item():.3e} N")
-    print(f"w_LC1 = {ds['w_LC1'].sel(foam=foam_name).values.item()*1e3:.3f} mm")
-    print(f"w_LC2 = {ds['w_LC2'].sel(foam=foam_name).values.item()*1e3:.3f} mm")
-    print(f"sigma_LC1 = {ds['sigma_LC1'].sel(foam=foam_name).values.item()/1e6:.3f} MPa")
-    print(f"sigma_LC2 = {ds['sigma_LC2'].sel(foam=foam_name).values.item()/1e6:.3f} MPa")
-    print(f"tau_LC1 = {ds['tau_LC1'].sel(foam=foam_name).values.item()/1e6:.3f} MPa")
-    print(f"tau_LC2 = {ds['tau_LC2'].sel(foam=foam_name).values.item()/1e6:.3f} MPa")
-    print(f"Tsai-Hill LC1 = {ds['tsaihill_LC1'].sel(foam=foam_name).values.item():.4f}")
-    print(f"Tsai-Hill LC2 = {ds['tsaihill_LC2'].sel(foam=foam_name).values.item():.4f}")
-    print(f"Tsai-Wu LC1 = {ds['tsaiwu_LC1'].sel(foam=foam_name).values.item():.4f}")
-    print(f"Tsai-Wu LC2 = {ds['tsaiwu_LC2'].sel(foam=foam_name).values.item():.4f}")
-    print(f"Face wrinkling reserve LC1 = {(ds['sigma_wrinkle'].sel(foam=foam_name).values.item() - ds['sigma_LC1'].sel(foam=foam_name).values.item())/1e6:.3f} MPa")
-    print(f"Face wrinkling reserve LC2 = {(ds['sigma_wrinkle'].sel(foam=foam_name).values.item() - ds['sigma_LC2'].sel(foam=foam_name).values.item())/1e6:.3f} MPa")
+    lines = []
+
+    def add(line):
+        lines.append(line)
+        print(line)
+
+    add(f"\n{'=' * 60}")
+    add(f"{case_name}")
+    add(f"{'=' * 60}")
+    add(f"Foam grade: {foam_name}")
+    add(f"Skin thickness t_s = {float(ds.t_s.values[0])*1e3:.2f} mm")
+    add(f"Core thickness t_c = {float(ds.t_c.values[0])*1e3:.2f} mm")
+    add("")
+
+    add("--- Global stiffness and deflection ---")
+    add(f"D = {ds['D'].sel(foam=foam_name).values.item():.3e} N m")
+    add(f"S = {ds['S'].sel(foam=foam_name).values.item():.3e} N")
+    add(f"w_LC1 = {ds['w_LC1'].sel(foam=foam_name).values.item()*1e3:.3f} mm")
+    add(f"w_LC2 = {ds['w_LC2'].sel(foam=foam_name).values.item()*1e3:.3f} mm")
+    add("")
+
+    add("--- Skin stresses and ply failure ---")
+    add(f"sigma_LC1 = {ds['sigma_LC1'].sel(foam=foam_name).values.item()/1e6:.3f} MPa")
+    add(f"sigma_LC2 = {ds['sigma_LC2'].sel(foam=foam_name).values.item()/1e6:.3f} MPa")
+    add(f"Tsai-Hill LC1 = {ds['tsaihill_LC1'].sel(foam=foam_name).values.item():.4f}")
+    add(f"Tsai-Hill LC2 = {ds['tsaihill_LC2'].sel(foam=foam_name).values.item():.4f}")
+    add(f"Tsai-Wu LC1 = {ds['tsaiwu_LC1'].sel(foam=foam_name).values.item():.4f}")
+    add(f"Tsai-Wu LC2 = {ds['tsaiwu_LC2'].sel(foam=foam_name).values.item():.4f}")
+    add("")
+
+    add("--- Core shear check ---")
+    tau_lc1 = ds['tau_LC1'].sel(foam=foam_name).values.item()
+    tau_lc2 = ds['tau_LC2'].sel(foam=foam_name).values.item()
+    core_shear_reserve_LC1 = ds['core_shear_reserve_LC1'].sel(foam=foam_name).values.item()
+    core_shear_reserve_LC2 = ds['core_shear_reserve_LC2'].sel(foam=foam_name).values.item()
+    core_shear_status_LC1 = "OK" if core_shear_reserve_LC1 >= 0 else "NOT OK"
+    core_shear_status_LC2 = "OK" if core_shear_reserve_LC2 >= 0 else "NOT OK"
+    add(f"tau_LC1 = {tau_lc1/1e6:.3f} MPa")
+    add(f"Core shear reserve LC1 = {core_shear_reserve_LC1/1e6:.3f} MPa")
+    add(f"CORE SHEAR STATUS LC1 = {core_shear_status_LC1}")
+    add(f"tau_LC2 = {tau_lc2/1e6:.3f} MPa")
+    add(f"Core shear reserve LC2 = {core_shear_reserve_LC2/1e6:.3f} MPa")
+    add(f"CORE SHEAR STATUS LC2 = {core_shear_status_LC2}")
+    add("")
+
+    add("--- Core indentation check ---")
+    core_indentation = ds['core_indentation_LC2'].sel(foam=foam_name).values.item()
+    core_indentation_reserve = ds['core_indentation_reserve_LC2'].sel(foam=foam_name).values.item()
+    core_indentation_status = "OK" if core_indentation_reserve >= 0 else "NOT OK"
+    add(f"Core indentation stress LC2 = {core_indentation/1e6:.3f} MPa")
+    add(f"Core indentation reserve LC2 = {core_indentation_reserve/1e6:.3f} MPa")
+    add(f"CORE INDENTATION STATUS LC2 = {core_indentation_status}")
+    add("")
+
+    add("--- Face wrinkling check ---")
+    face_wrinkling_reserve_LC1 = ds['sigma_wrinkle'].sel(foam=foam_name).values.item() - ds['sigma_LC1'].sel(foam=foam_name).values.item()
+    face_wrinkling_reserve_LC2 = ds['sigma_wrinkle'].sel(foam=foam_name).values.item() - ds['sigma_LC2'].sel(foam=foam_name).values.item()
+    face_wrinkling_status_LC1 = "OK" if face_wrinkling_reserve_LC1 >= 0 else "NOT OK"
+    face_wrinkling_status_LC2 = "OK" if face_wrinkling_reserve_LC2 >= 0 else "NOT OK"
+    add(f"Face wrinkling reserve LC1 = {face_wrinkling_reserve_LC1/1e6:.3f} MPa")
+    add(f"FACE WRINKLING STATUS LC1 = {face_wrinkling_status_LC1}")
+    add(f"Face wrinkling reserve LC2 = {face_wrinkling_reserve_LC2/1e6:.3f} MPa")
+    add(f"FACE WRINKLING STATUS LC2 = {face_wrinkling_status_LC2}")
+
+    return lines
 
 
 def plot_through_thickness_profile(profile, title_prefix=""):
@@ -631,11 +694,19 @@ def plot_through_thickness_profile(profile, title_prefix=""):
     return fig, ax
 
 
+
 foam_panel = SELECTED_CASE_PANEL["foam"]
 foam_cross = SELECTED_CASE_CROSS["foam"]
 
-summarize_single_case(ds_panel, "PANEL CASE", foam_panel)
-summarize_single_case(ds_cross, "CROSS-BEAM CASE", foam_cross)
+summary_lines = []
+summary_lines += summarize_single_case(ds_panel, "PANEL CASE", foam_panel)
+summary_lines += summarize_single_case(ds_cross, "CROSS-BEAM CASE", foam_cross)
+
+summary_path = Path(__file__).parent / "final_design_summary.txt"
+with open(summary_path, "w") as file:
+    file.write("\n".join(summary_lines))
+
+print(f"\nSummary saved to: {summary_path}")
 
 profile_panel = build_through_thickness_profile(
     ds=ds_panel,
